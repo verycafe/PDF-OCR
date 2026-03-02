@@ -22,8 +22,7 @@ coverage.xml
 # Databases
 *.db
 *.sqlite3
-data/uploads/
-data/results/
+data/
 
 # Environment variables
 .env
@@ -44,10 +43,16 @@ Thumbs.db
 *.swp
 *.swo
 
-# Frontend (redundant but safe)
+# Frontend
 frontend/node_modules/
 frontend/dist/
 frontend/build/
 frontend/npm-debug.log*
 frontend/yarn-debug.log*
 frontend/yarn-error.log*
+
+# Test and temporary files
+*.pdf
+test_*.py
+debug_*.py
+*_test.py
