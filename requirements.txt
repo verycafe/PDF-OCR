@@ -1,0 +1,15 @@
+flask==3.0.0
+flask-cors==4.0.0
+zhipuai==2.0.1
+peewee==3.17.0
+pymupdf4llm==0.0.17
+paddleocr>=2.7.0.3
+paddlepaddle>=2.6.0
+numpy<2.0.0
+Pillow>=10.0.0
+requests
+python-dotenv
+llmlingua
+torch
+transformers
+accelerate
