@@ -1,6 +1,10 @@
 """
 文档处理器 - PDF 解析、OCR 识别、内容清理的核心处理逻辑
-处理流程：PDF → Markdown 解析 → 图片 OCR → 内容合并 → 文本清理
+处理流程：
+1. PDF 页面元素分析（文本/表格/图片）
+2. 分类提取：文本直接提取、PDF表格转Markdown、图片导出
+3. 图片识别：表格图片用表格识别、普通图片用OCR
+4. 按页面顺序合并内容 → 文本清理
 """
 import os
 import time
@@ -8,10 +12,10 @@ import re
 import hashlib
 import threading
 import logging
-import pymupdf4llm
+import fitz  # PyMuPDF
 from PIL import Image
 import numpy as np
-from paddleocr import PaddleOCR
+from paddleocr import PaddleOCR, PPStructureV3
 from app.models.document import Document
 from app.services.task_queue import task_queue
 from app.services.event_bus import event_bus
@@ -23,25 +27,175 @@ logger = logging.getLogger(__name__)
 # OCR 引擎全局单例（避免重复加载模型）
 ocr_lock = threading.Lock()  # 线程锁，确保线程安全
 _ocr_engine = None
+_structure_engine = None  # 表格识别引擎
 
 def get_ocr_engine():
     """
     获取 OCR 引擎单例
-    使用 PaddleOCR 进行中文文字识别
+    使用 PaddleOCR 3.4.0+ 进行中文文字识别
     """
     global _ocr_engine
     with ocr_lock:
         if _ocr_engine is None:
             _ocr_engine = PaddleOCR(
-                use_angle_cls=False,       # 关闭角度分类（假设图片方向正确，提升速度）
-                lang='ch',                 # 中文识别
-                det_db_thresh=0.6,        # 文本检测阈值（提高以过滤噪点）
-                det_db_box_thresh=0.7,    # 文本框阈值
-                det_db_unclip_ratio=1.6,  # 文本框扩展比例
-                det_limit_side_len=960,   # 图片最大边长限制
-                det_limit_type='max'      # 限制类型
+                use_textline_orientation=False,  # 关闭文本行方向分类（新版参数名）
+                lang='ch',                       # 中文识别
+                text_det_thresh=0.6,            # 文本检测阈值（新版参数名）
+                text_det_box_thresh=0.7,        # 文本框阈值（新版参数名）
+                text_det_unclip_ratio=1.6,      # 文本框扩展比例（新版参数名）
+                text_det_limit_side_len=960,    # 图片最大边长限制（新版参数名）
+                text_det_limit_type='max'       # 限制类型（新版参数名）
             )
     return _ocr_engine
+
+def get_structure_engine():
+    """
+    获取表格识别引擎单例
+    使用 PPStructureV3 进行文档结构分析和表格识别
+    """
+    global _structure_engine
+    with ocr_lock:
+        if _structure_engine is None:
+            _structure_engine = PPStructureV3(
+                use_table_recognition=True,      # 启用表格识别
+                use_formula_recognition=False,   # 禁用公式识别（节省资源）
+                use_chart_recognition=False,     # 禁用图表识别
+                lang='ch'                        # 中文
+            )
+    return _structure_engine
+
+def convert_table_to_markdown(table_result):
+    """
+    将表格识别结果转换为 Markdown 表格格式
+
+    Args:
+        table_result: PPStructureV3 返回的表格结果
+
+    Returns:
+        str: Markdown 格式的表格
+    """
+    try:
+        # 检查是否有表格数据
+        if not table_result or 'html' not in table_result:
+            return ""
+
+        # PPStructureV3 返回 HTML 格式的表格，需要转换为 Markdown
+        html_table = table_result['html']
+
+        # 简单的 HTML 表格转 Markdown（可以后续优化）
+        # 这里先返回 HTML，因为 Markdown 也支持内嵌 HTML
+        return f"\n{html_table}\n"
+
+    except Exception as e:
+        logger.error(f"Table to Markdown conversion failed: {e}")
+        return ""
+
+def extract_pdf_table_to_markdown(page, table_obj):
+    """
+    从 PDF 页面提取原生表格并转换为 Markdown
+
+    Args:
+        page: PyMuPDF 页面对象
+        table_obj: PyMuPDF 的 Table 对象
+
+    Returns:
+        str: Markdown 格式的表格
+    """
+    try:
+        # 使用 PyMuPDF 的表格提取功能
+        table_data = table_obj.extract()
+
+        if not table_data:
+            return ""
+
+        md_lines = []
+
+        for row_idx, row in enumerate(table_data):
+            # 清理单元格内容（去除换行符和多余空格）
+            cells = [str(cell).replace('\n', ' ').strip() if cell else '' for cell in row]
+
+            # 构建表格行
+            md_lines.append("| " + " | ".join(cells) + " |")
+
+            # 第一行后添加分隔符
+            if row_idx == 0:
+                md_lines.append("| " + " | ".join(["---"] * len(cells)) + " |")
+
+        return "\n" + "\n".join(md_lines) + "\n"
+
+    except Exception as e:
+        logger.error(f"PDF table extraction failed: {e}")
+        return ""
+
+def analyze_page_layout(page):
+    """
+    分析 PDF 页面布局，识别文本、表格、图片区域
+
+    Args:
+        page: PyMuPDF 页面对象
+
+    Returns:
+        dict: {
+            'text_blocks': [(bbox, text), ...],
+            'tables': [bbox, ...],
+            'images': [(bbox, image_data), ...]
+        }
+    """
+    layout = {
+        'text_blocks': [],
+        'tables': [],
+        'images': []
+    }
+
+    try:
+        # 1. 提取图片
+        image_list = page.get_images(full=True)
+        for img_index, img in enumerate(image_list):
+            xref = img[0]
+            bbox = page.get_image_bbox(img)
+            base_image = page.parent.extract_image(xref)
+            layout['images'].append((bbox, base_image))
+
+        # 2. 检测表格（使用 PyMuPDF 的表格检测）
+        tables = page.find_tables()
+        if tables:
+            for table in tables:
+                # 保存 table 对象和 bbox（用于排除文本）
+                layout['tables'].append(table)
+
+        # 3. 提取文本块（排除表格和图片区域）
+        text_blocks = page.get_text("blocks")
+
+        for block in text_blocks:
+            if len(block) >= 5:
+                bbox = fitz.Rect(block[:4])
+                text = block[4].strip()
+
+                if not text:
+                    continue
+
+                # 检查是否与表格或图片重叠
+                is_overlap = False
+
+                for table in layout['tables']:
+                    if bbox.intersects(table.bbox):
+                        is_overlap = True
+                        break
+
+                if not is_overlap:
+                    for img_bbox, _ in layout['images']:
+                        if bbox.intersects(img_bbox):
+                            is_overlap = True
+                            break
+
+                if not is_overlap:
+                    layout['text_blocks'].append((bbox, text))
+
+        return layout
+
+    except Exception as e:
+        logger.error(f"Page layout analysis failed: {e}")
+        return layout
 
 class DocumentProcessor:
     """文档处理器 - 负责 PDF 的解析、OCR 和清理"""
@@ -154,11 +308,11 @@ class DocumentProcessor:
     @staticmethod
     def process_document(cancel_event, doc_id):
         """
-        文档处理主流程
-        1. PDF 解析为 Markdown（pymupdf4llm）
-        2. 提取图片并进行 OCR 识别（PaddleOCR）
-        3. 将 OCR 结果合并到 Markdown
-        4. 清理文本内容
+        文档处理主流程（新版）
+        1. 打开 PDF，逐页分析布局（文本/表格/图片）
+        2. 分类提取：文本直接提取、PDF表格转Markdown、图片导出
+        3. 图片识别：表格图片用表格识别、普通图片用OCR
+        4. 按页面顺序合并内容 → 清理
 
         Args:
             cancel_event: 取消事件（用于中断处理）
@@ -182,7 +336,7 @@ class DocumentProcessor:
                 event_bus.emit('status', json.dumps({'doc_id': doc_id, 'status': 'cancelled'}))
                 return
 
-            # ========== 阶段 1: PDF 解析为 Markdown ==========
+            # ========== 阶段 1: PDF 页面分析 ==========
             doc.processing_stage = 'parsing'
             doc.progress = 0
             doc.save()
@@ -193,8 +347,102 @@ class DocumentProcessor:
             os.makedirs(image_dir, exist_ok=True)
 
             try:
-                # 使用 pymupdf4llm 将 PDF 转换为 Markdown，同时提取图片
-                md_text = pymupdf4llm.to_markdown(doc.file_path, write_images=True, image_path=image_dir)
+                # 打开 PDF 文档
+                pdf_doc = fitz.open(doc.file_path)
+                total_pages = len(pdf_doc)
+                logger.info(f"PDF has {total_pages} pages")
+
+                # 存储每页的内容
+                page_contents = []
+                all_images = []  # 存储所有导出的图片信息
+
+                # 逐页处理
+                for page_num in range(total_pages):
+                    if cancel_event.is_set():
+                        pdf_doc.close()
+                        doc.status = 'cancelled'
+                        doc.save()
+                        event_bus.emit('status', json.dumps({'doc_id': doc_id, 'status': 'cancelled'}))
+                        return
+
+                    page = pdf_doc[page_num]
+                    logger.info(f"Processing page {page_num + 1}/{total_pages}")
+
+                    # 分析页面布局
+                    layout = analyze_page_layout(page)
+
+                    page_content = []
+
+                    # 1. 处理文本块
+                    for bbox, text in layout['text_blocks']:
+                        page_content.append(('text', text))
+
+                    # 2. 处理 PDF 原生表格
+                    for table in layout['tables']:
+                        table_md = extract_pdf_table_to_markdown(page, table)
+                        if table_md:
+                            page_content.append(('table', table_md))
+
+                    # 3. 导出图片
+                    for img_index, (img_bbox, img_data) in enumerate(layout['images']):
+                        img_filename = f"page{page_num + 1}_img{img_index + 1}.png"
+                        img_path = os.path.join(image_dir, img_filename)
+
+                        # 保存图片
+                        with open(img_path, "wb") as img_file:
+                            img_file.write(img_data["image"])
+
+                        all_images.append({
+                            'path': img_path,
+                            'filename': img_filename,
+                            'page': page_num + 1,
+                            'bbox': img_bbox
+                        })
+
+                        # 在内容中标记图片位置
+                        page_content.append(('image', img_filename))
+
+                    page_contents.append(page_content)
+
+                    # 更新进度
+                    progress = int((page_num + 1) / total_pages * 100)
+                    doc.progress = progress
+                    doc.save()
+                    event_bus.emit('status', json.dumps({
+                        'doc_id': doc_id,
+                        'status': 'processing',
+                        'stage': 'parsing',
+                        'progress': progress
+                    }))
+
+                pdf_doc.close()
+
+                # 构建初始 Markdown（不含图片识别结果）
+                md_lines = []
+                for page_num, page_content in enumerate(page_contents):
+                    md_lines.append(f"\n## Page {page_num + 1}\n")
+                    for content_type, content in page_content:
+                        if content_type == 'text':
+                            md_lines.append(content)
+                        elif content_type == 'table':
+                            md_lines.append(content)
+                        elif content_type == 'image':
+                            md_lines.append(f"\n![{content}]({content})\n")
+
+                md_text = "\n".join(md_lines)
+
+                # 保存纯解析结果
+                doc.parsing_content = md_text
+                doc.raw_text_content = md_text
+                doc.save()
+
+            except Exception as e:
+                logger.error(f"PDF parsing failed: {e}")
+                doc.status = 'failed'
+                doc.error_message = f"PDF Parsing Error: {str(e)}"
+                doc.save()
+                event_bus.emit('status', json.dumps({'doc_id': doc_id, 'status': 'failed', 'error': str(e)}))
+                return
 
                 # 保存纯解析结果（未经 OCR 修改）
                 doc.parsing_content = md_text
@@ -218,179 +466,143 @@ class DocumentProcessor:
                 event_bus.emit('status', json.dumps({'doc_id': doc_id, 'status': 'cancelled'}))
                 return
 
-            # ========== 阶段 2: 图片 OCR 识别 ==========
+            # ========== 阶段 2: 图片识别（表格/文字） ==========
             doc.processing_stage = 'ocr'
             doc.progress = 0
             doc.save()
             event_bus.emit('status', json.dumps({'doc_id': doc_id, 'status': 'processing', 'stage': 'ocr', 'progress': 0}))
 
-            logger.info(f"Markdown preview for doc {doc_id}: {md_text[:500]}")
-
-            # 从 Markdown 中提取所有图片链接
-            # 正则匹配：(xxx.png) 或 (xxx.jpg) 等
-            potential_links = re.findall(r'\(([^)]+\.(?:png|jpg|jpeg|bmp|tiff))', md_text, re.IGNORECASE)
-
-            # 去重
-            image_links = list(set(potential_links))
-
-            total_images = len(image_links)
+            total_images = len(all_images)
             logger.info(f"Found {total_images} images in document {doc_id}")
 
             ocr = None
-            if total_images == 0:
-                 # 没有图片，保存空 OCR 数据
-                 doc.ocr_data = "[]"
-                 doc.save()
-
-            if total_images > 0:
-                # 初始化 OCR 引擎
-                ocr = get_ocr_engine()
-
-            processed_images = 0
+            structure = None
             ocr_results = []
 
-            # 加载已有的 OCR 数据（支持断点续传）
-            if doc.ocr_data:
-                try:
-                    existing_data = json.loads(doc.ocr_data)
-                    if isinstance(existing_data, list):
-                        ocr_results = existing_data
-                        logger.info(f"Loaded {len(ocr_results)} existing OCR results for resumption.")
-                except Exception as e:
-                    logger.warning(f"Failed to load existing OCR data: {e}")
+            if total_images == 0:
+                # 没有图片，保存空 OCR 数据
+                doc.ocr_data = "[]"
+                doc.save()
+            else:
+                # 初始化 OCR 引擎和表格识别引擎
+                ocr = get_ocr_engine()
+                structure = get_structure_engine()
 
-            # 已处理图片的文件名集合（用于跳过）
-            processed_img_ids = {item.get('image_name') for item in ocr_results if item.get('image_name')}
+            processed_images = 0
 
-            # 遍历每张图片进行 OCR
-            for img_rel_path in image_links:
+            # 遍历每张图片进行识别
+            for img_info in all_images:
                 if cancel_event.is_set():
                     doc.status = 'cancelled'
                     doc.save()
                     event_bus.emit('status', json.dumps({'doc_id': doc_id, 'status': 'cancelled'}))
                     return
 
-                # 检查是否已处理过
-                img_filename_check = os.path.basename(img_rel_path)
-                if img_filename_check in processed_img_ids:
-                    logger.info(f"Skipping already processed image: {img_filename_check}")
+                img_path = img_info['path']
+                img_filename = img_info['filename']
+
+                if not os.path.exists(img_path):
+                    logger.warning(f"Image not found: {img_path}")
                     processed_images += 1
                     continue
 
-                # 解析图片的绝对路径
-                img_full_path = img_rel_path
-                if not os.path.isabs(img_full_path):
-                     img_name = os.path.basename(img_rel_path)
-                     img_full_path = os.path.join(image_dir, img_name)
+                try:
+                    logger.info(f"Processing image: {img_filename}")
+                    # 加载图片
+                    image = Image.open(img_path).convert('RGB')
+                    img_np = np.array(image)
 
-                if not os.path.exists(img_full_path):
-                    img_name = os.path.basename(img_rel_path)
-                    img_full_path = os.path.join(image_dir, img_name)
+                    ocr_text = ""
+                    is_table = False
 
-                if os.path.exists(img_full_path):
+                    # 第一步：使用 PPStructureV3 检测图片类型
                     try:
-                        logger.info(f"Running OCR on image: {img_full_path}")
-                        # 加载图片
-                        image = Image.open(img_full_path).convert('RGB')
-                        img_np = np.array(image)
+                        logger.info(f"Detecting layout for: {img_filename}")
+                        structure_result = structure(img_np)
 
-                        if ocr is None:
-                            logger.error("OCR engine is None, skipping")
-                            continue
-
-                        ocr_text = ""
-                        try:
-                            # 调用 PaddleOCR 进行识别
-                            result = ocr.ocr(img_np, cls=False)
-                            logger.info(f"OCR finished for {os.path.basename(img_full_path)}. Result type: {type(result)}")
-
-                            if result is None:
-                                logger.warning(f"OCR result is None for {img_full_path}")
-                            else:
-                                # 解析 OCR 结果（兼容不同版本的返回格式）
-                                if isinstance(result, list) and len(result) > 0:
-                                    if result[0] is None:
-                                        logger.warning("OCR result[0] is None (no text found)")
-                                    elif isinstance(result[0], list):
-                                        # 标准格式：[[box, (text, score)], ...]
-                                        logger.info("Detected standard list-of-lists OCR result format")
-                                        lines = []
-                                        for line in result[0]:
-                                            if line and len(line) >= 2 and isinstance(line[1], (list, tuple)):
-                                                lines.append(line[1][0])
-                                        ocr_text = "\n".join(lines)
-                                    elif hasattr(result[0], 'rec_texts'):
-                                        # 新格式：对象包含 rec_texts 属性
-                                        logger.info("Detected new OCR result format (object in list)")
-                                        ocr_text = "\n".join(result[0].rec_texts)
-
-                        except Exception as e:
-                            logger.error(f"Standard ocr.ocr() parsing failed: {e}")
-
-                        # 如果标准方法失败，尝试 predict() 方法（新版本 PaddleOCR）
-                        if not ocr_text and hasattr(ocr, 'predict'):
-                            try:
-                                logger.info("Attempting ocr.predict() for new PaddleOCR version...")
-                                pred_res = ocr.predict(img_np)
-                                if isinstance(pred_res, list) and len(pred_res) > 0:
-                                    res_obj = pred_res[0]
-                                    if hasattr(res_obj, 'rec_texts'):
-                                        ocr_text = "\n".join(res_obj.rec_texts)
-                                    elif isinstance(res_obj, dict) and 'rec_texts' in res_obj:
-                                         ocr_text = "\n".join(res_obj['rec_texts'])
-                            except Exception as e:
-                                logger.error(f"ocr.predict() failed: {e}")
-
-                        if not ocr_text:
-                            logger.warning(f"No text extracted for {img_full_path} (or empty result)")
-
-                        # 将 OCR 结果插入到 Markdown 中
-                        img_filename = os.path.basename(img_rel_path)
-                        escaped_filename = re.escape(img_filename)
-
-                        # 生成图片 ID（用于追踪）
-                        img_id = f"IMG-{hashlib.md5(img_filename.encode()).hexdigest()[:6].upper()}"
-
-                        # 构建正则匹配图片链接
-                        pattern = r'(!?\[[^\]]*?\]\([^)]*?' + escaped_filename + r'[^)]*?\))'
-
-                        # 格式化 OCR 内容（使用引用块格式）
-                        if ocr_text:
-                            ocr_content = f"\n> [OCR Content - {img_id}]:\n> {ocr_text.replace(chr(10), chr(10) + '> ')}\n"
-                        else:
-                            ocr_content = f"\n> [OCR Content - {img_id}]: (No text detected)\n"
-
-                        # 在图片链接后追加 OCR 内容
-                        match = re.search(pattern, md_text)
-                        if match:
-                            md_text = re.sub(pattern, lambda m: m.group(0) + ocr_content, md_text, count=1)
-                        else:
-                            # 备用方案：直接在文件名后插入
-                            if img_filename in md_text:
-                                idx = md_text.find(img_filename)
-                                if idx != -1:
-                                    closing_paren_idx = md_text.find(')', idx)
-                                    if closing_paren_idx != -1:
-                                        md_text = md_text[:closing_paren_idx+1] + ocr_content + md_text[closing_paren_idx+1:]
-                                    else:
-                                        md_text = md_text[:idx+len(img_filename)] + ocr_content + md_text[idx+len(img_filename):]
-
-                        # 保存 OCR 结果
-                        ocr_results.append({
-                            'id': img_id,
-                            'image_name': os.path.basename(img_full_path),
-                            'text': ocr_text
-                        })
+                        # 检查是否包含表格
+                        if structure_result and len(structure_result) > 0:
+                            for item in structure_result:
+                                if item.get('type') == 'table':
+                                    is_table = True
+                                    logger.info(f"Table detected in {img_filename}")
+                                    # 提取表格内容
+                                    table_md = convert_table_to_markdown(item)
+                                    if table_md:
+                                        ocr_text = table_md
+                                    break
 
                     except Exception as e:
-                        logger.error(f"OCR failed for image {img_full_path}: {e}")
+                        logger.error(f"Layout detection failed for {img_filename}: {e}")
+
+                    # 第二步：如果不是表格，使用普通 OCR
+                    if not is_table:
+                        try:
+                            logger.info(f"Running OCR on {img_filename}")
+                            result = ocr.ocr(img_np)
+
+                            if result is None:
+                                logger.warning(f"OCR result is None for {img_filename}")
+                            elif isinstance(result, list) and len(result) > 0:
+                                ocr_result = result[0]
+
+                                if ocr_result is None:
+                                    logger.warning("OCR result[0] is None (no text found)")
+                                elif hasattr(ocr_result, '__getitem__') and 'rec_texts' in ocr_result:
+                                    rec_texts = ocr_result['rec_texts']
+                                    if rec_texts:
+                                        ocr_text = "\n".join(rec_texts)
+                                        logger.info(f"Extracted {len(rec_texts)} text lines from OCR")
+                                    else:
+                                        logger.warning("rec_texts is empty")
+                                else:
+                                    logger.warning(f"Unknown OCR result format: {type(ocr_result)}")
+                            else:
+                                logger.warning(f"Unexpected OCR result structure: {type(result)}")
+
+                        except Exception as e:
+                            logger.error(f"OCR failed for {img_filename}: {e}", exc_info=True)
+
+                    if not ocr_text:
+                        logger.warning(f"No text extracted for {img_filename}")
+
+                    # 生成图片 ID
+                    img_id = f"IMG-{hashlib.md5(img_filename.encode()).hexdigest()[:6].upper()}"
+
+                    # 在 Markdown 中插入识别结果
+                    escaped_filename = re.escape(img_filename)
+                    pattern = r'(!?\[[^\]]*?\]\([^)]*?' + escaped_filename + r'[^)]*?\))'
+
+                    # 格式化内容
+                    if ocr_text:
+                        if is_table:
+                            ocr_content = f"\n> [Table Content - {img_id}]:\n{ocr_text}\n"
+                        else:
+                            ocr_content = f"\n> [OCR Content - {img_id}]:\n> {ocr_text.replace(chr(10), chr(10) + '> ')}\n"
+                    else:
+                        ocr_content = f"\n> [OCR Content - {img_id}]: (No text detected)\n"
+
+                    # 在图片链接后追加识别内容
+                    match = re.search(pattern, md_text)
+                    if match:
+                        md_text = re.sub(pattern, lambda m: m.group(0) + ocr_content, md_text, count=1)
+
+                    # 保存识别结果
+                    ocr_results.append({
+                        'id': img_id,
+                        'image_name': img_filename,
+                        'text': ocr_text,
+                        'is_table': is_table
+                    })
+
+                except Exception as e:
+                    logger.error(f"Image processing failed for {img_filename}: {e}")
 
                 processed_images += 1
                 # 更新进度
                 current_progress = int((processed_images / total_images) * 100)
                 doc.progress = current_progress
                 doc.status_message = f"Processing image {processed_images}/{total_images}"
-                # 保存部分结果（支持断点续传）
                 doc.ocr_data = json.dumps(ocr_results)
                 doc.save()
                 event_bus.emit('status', json.dumps({
