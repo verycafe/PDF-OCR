@@ -16,7 +16,7 @@ export default function AppLayout() {
             </div>
             <div className="flex items-center space-x-4">
               {/* Future: User Profile or Settings */}
-              <span className="text-sm text-gray-500">v0.1.1</span>
+              <span className="text-sm text-gray-500">v2.1.1</span>
             </div>
           </div>
         </div>
