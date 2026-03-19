@@ -45,9 +45,14 @@ def upload_file(project_id):
     # 处理每个上传的文件
     for file in files:
         if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            # 生成唯一文件名防止覆盖
-            unique_filename = f"{uuid.uuid4().hex}_{filename}"
+            original_filename = file.filename
+            secure_name = secure_filename(original_filename)
+            # 如果 secure_filename 过滤掉了所有字符（例如全中文名），则使用原名，否则为了安全系统可能会报错
+            if not secure_name:
+                secure_name = "document.pdf"
+            
+            # 生成唯一文件名防止覆盖 (使用 secure_name 保存到磁盘以避免路径问题)
+            unique_filename = f"{uuid.uuid4().hex}_{secure_name}"
 
             # 创建项目专属上传目录
             project_upload_dir = os.path.join(Config.UPLOAD_FOLDER, str(project_id))
@@ -57,10 +62,10 @@ def upload_file(project_id):
             file_path = os.path.join(project_upload_dir, unique_filename)
             file.save(file_path)
 
-            # 保存到数据库
+            # 保存到数据库 (使用原始文件名展示给用户)
             doc = Document.create(
                 project=project,
-                filename=filename,
+                filename=original_filename,
                 file_path=file_path,
                 status='queued'
             )

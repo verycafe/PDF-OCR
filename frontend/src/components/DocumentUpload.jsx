@@ -155,6 +155,9 @@ const PreviewModal = ({ doc, initialTab = 'pdf', onClose }) => {
                  displayContent = displayContent.replace(/> \[OCR Content - IMG-[A-F0-9]+\]:(?:\n> .*)*\n?/g, '');
              }
 
+             // 获取不带扩展名的文件名
+             const baseFilename = doc.filename.replace(/\.[^/.]+$/, "");
+
              return (
                 <div className="w-full h-full overflow-auto bg-white p-4 border rounded font-mono text-sm whitespace-pre-wrap">
                     <div className="mb-4 p-2 bg-blue-50 text-blue-800 text-xs rounded border border-blue-200 flex justify-between items-center">
@@ -163,7 +166,7 @@ const PreviewModal = ({ doc, initialTab = 'pdf', onClose }) => {
                             variant="ghost"
                             size="sm"
                             className="h-6 text-blue-700 hover:text-blue-900"
-                            onClick={() => downloadFile(displayContent, `${doc.filename}_parsing.md`)}
+                            onClick={() => downloadFile(displayContent, `${baseFilename}_parsing.md`)}
                         >
                             <Download className="h-3 w-3 mr-1" /> Download MD
                         </Button>
@@ -175,6 +178,8 @@ const PreviewModal = ({ doc, initialTab = 'pdf', onClose }) => {
 
         // 合并内容标签页（Markdown + OCR，未清理）
         if (tab === 'merging') {
+             // 获取不带扩展名的文件名
+             const baseFilename = doc.filename.replace(/\.[^/.]+$/, "");
              return (
                 <div className="w-full h-full overflow-auto bg-white p-4 border rounded font-mono text-sm whitespace-pre-wrap">
                     <div className="mb-4 p-2 bg-yellow-50 text-yellow-800 text-xs rounded border border-yellow-200 flex justify-between items-center">
@@ -183,7 +188,7 @@ const PreviewModal = ({ doc, initialTab = 'pdf', onClose }) => {
                             variant="ghost"
                             size="sm"
                             className="h-6 text-yellow-700 hover:text-yellow-900"
-                            onClick={() => downloadFile(rawContent, `${doc.filename}_raw.md`)}
+                            onClick={() => downloadFile(rawContent, `${baseFilename}_raw.md`)}
                         >
                             <Download className="h-3 w-3 mr-1" /> Download MD
                         </Button>
@@ -194,6 +199,8 @@ const PreviewModal = ({ doc, initialTab = 'pdf', onClose }) => {
         }
 
         // 清理结果标签页（最终内容）
+        // 获取不带扩展名的文件名
+        const baseFilename = doc.filename.replace(/\.[^/.]+$/, "");
         return (
             <div className="w-full h-full overflow-auto bg-white p-4 border rounded font-mono text-sm whitespace-pre-wrap">
                  <div className="mb-4 p-2 bg-green-50 text-green-800 text-xs rounded border border-green-200 flex justify-between items-center">
@@ -210,7 +217,7 @@ const PreviewModal = ({ doc, initialTab = 'pdf', onClose }) => {
                         variant="ghost"
                         size="sm"
                         className="h-6 text-green-700 hover:text-green-900"
-                        onClick={() => downloadFile(content, `${doc.filename}_cleaned.md`)}
+                        onClick={() => downloadFile(content, `${baseFilename}.md`)}
                     >
                         <Download className="h-3 w-3 mr-1" /> Download MD
                     </Button>
