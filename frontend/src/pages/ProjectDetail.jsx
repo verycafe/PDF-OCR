@@ -92,7 +92,7 @@ export default function ProjectDetail() {
       fetchDocuments();
     } catch (error) {
       console.error("Upload failed:", error);
-      alert("Upload failed");
+      alert("上传失败");
       setUploadingDocs([]);
     }
   };
@@ -119,19 +119,20 @@ export default function ProjectDetail() {
     }
 
     // 确认删除
-    if (confirm("Are you sure you want to delete this document?")) {
+    if (confirm("确定要删除这个文档吗？")) {
         try {
             await documentsApi.delete(docId);
             fetchDocuments();
         } catch (error) {
             console.error("Delete failed:", error);
+            alert("删除文档失败：" + (error.response?.data?.error || error.message));
         }
     }
   };
 
   // 加载状态和错误处理
-  if (loading) return <div className="text-center py-10">Loading project...</div>;
-  if (!project) return <div className="text-center py-10">Project not found</div>;
+  if (loading) return <div className="text-center py-10">项目加载中...</div>;
+  if (!project) return <div className="text-center py-10">项目不存在</div>;
 
   return (
     <div className="space-y-6">

@@ -2,12 +2,16 @@
 项目 API - 处理项目的增删改查操作
 """
 import os
+import shutil
 import zipfile
 from io import BytesIO
 from flask import Blueprint, request, jsonify, send_file
 from app.models.project import Project
 from app.models.document import Document
 from playhouse.shortcuts import model_to_dict
+from config import Config
+from app.services.document_processor import build_document_task_id
+from app.services.task_queue import task_queue
 
 projects_bp = Blueprint('projects', __name__)
 
@@ -91,6 +95,42 @@ def update_project(project_id):
         return jsonify(model_to_dict(project))
     except Project.DoesNotExist:
         return jsonify({'error': 'Project not found'}), 404
+
+@projects_bp.route('/<int:project_id>', methods=['DELETE'])
+def delete_project(project_id):
+    """删除项目及其磁盘文件，必要时可强制取消处理中任务"""
+    try:
+        project = Project.get_by_id(project_id)
+    except Project.DoesNotExist:
+        return jsonify({'error': '项目不存在'}), 404
+
+    force_delete = request.args.get('force', '').lower() in ('1', 'true', 'yes')
+
+    active_docs = list(
+        Document.select()
+        .where(
+            (Document.project == project) &
+            (Document.status.in_(['queued', 'processing']))
+        )
+    )
+
+    if active_docs and not force_delete:
+        return jsonify({
+            'error': '项目中仍有文档正在处理中',
+            'code': 'project_has_active_documents',
+            'active_documents': len(active_docs),
+        }), 409
+
+    if active_docs:
+        for doc in active_docs:
+            task_queue.cancel_task(build_document_task_id(doc.id))
+
+    project_upload_dir = os.path.join(Config.UPLOAD_FOLDER, str(project.id))
+    if os.path.isdir(project_upload_dir):
+        shutil.rmtree(project_upload_dir, ignore_errors=True)
+
+    project.delete_instance(recursive=True)
+    return jsonify({'message': '项目已删除'})
 
 @projects_bp.route('/<int:project_id>/markdown-archive', methods=['GET'])
 def download_project_markdown_archive(project_id):

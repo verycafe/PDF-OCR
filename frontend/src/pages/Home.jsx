@@ -46,7 +46,7 @@ export default function Home() {
 
     // 验证项目名称
     if (!newProject.name) {
-        alert("Please enter a project name");
+        alert("请输入项目名称");
         return;
     }
 
@@ -60,7 +60,45 @@ export default function Home() {
       fetchProjects();
     } catch (error) {
       console.error('Failed to create project:', error);
-      alert("Failed to create project: " + (error.response?.data?.error || error.message));
+      alert("创建项目失败：" + (error.response?.data?.error || error.message));
+    }
+  };
+
+  /**
+   * 删除项目
+   * @param {Object} project - 项目对象
+   */
+  const handleDeleteProject = async (project) => {
+    if (!confirm(`确定要删除项目“${project.name}”吗？`)) {
+      return;
+    }
+
+    try {
+      await projectsApi.delete(project.id);
+      fetchProjects();
+    } catch (error) {
+      if (error.response?.status === 409 && error.response?.data?.code === 'project_has_active_documents') {
+        const shouldForceDelete = confirm(
+          `项目“${project.name}”里还有文档正在处理中。\n如果继续删除，系统会终止这些任务并删除项目文件。\n\n确定继续删除吗？`
+        );
+
+        if (!shouldForceDelete) {
+          return;
+        }
+
+        try {
+          await projectsApi.delete(project.id, { force: true });
+          fetchProjects();
+          return;
+        } catch (forceDeleteError) {
+          console.error('Failed to force delete project:', forceDeleteError);
+          alert("强制删除项目失败：" + (forceDeleteError.response?.data?.error || forceDeleteError.message));
+          return;
+        }
+      }
+
+      console.error('Failed to delete project:', error);
+      alert("删除项目失败：" + (error.response?.data?.error || error.message));
     }
   };
 
@@ -68,24 +106,24 @@ export default function Home() {
     <div className="space-y-6">
       {/* 页面标题和创建按钮 */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Projects</h1>
+        <h1 className="text-2xl font-bold text-gray-900">项目</h1>
         <Button onClick={() => setIsModalOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" /> New Project
+          <Plus className="mr-2 h-4 w-4" /> 新建项目
         </Button>
       </div>
 
       {/* 项目列表或空状态 */}
       {loading ? (
-        <div className="text-center py-10">Loading projects...</div>
+        <div className="text-center py-10">项目加载中...</div>
       ) : projects.length === 0 ? (
         // 空状态提示
         <div className="text-center py-10 bg-white rounded-lg border border-dashed border-gray-300">
           <FileText className="mx-auto h-12 w-12 text-gray-400" />
-          <h3 className="mt-2 text-sm font-medium text-gray-900">No projects</h3>
-          <p className="mt-1 text-sm text-gray-500">Get started by creating a new project.</p>
+          <h3 className="mt-2 text-sm font-medium text-gray-900">还没有项目</h3>
+          <p className="mt-1 text-sm text-gray-500">先创建一个项目开始使用吧。</p>
           <div className="mt-6">
             <Button onClick={() => setIsModalOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" /> New Project
+              <Plus className="mr-2 h-4 w-4" /> 新建项目
             </Button>
           </div>
         </div>
@@ -93,7 +131,11 @@ export default function Home() {
         // 项目卡片网格
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((project) => (
-            <ProjectCard key={project.id} project={project} />
+            <ProjectCard
+              key={project.id}
+              project={project}
+              onDelete={handleDeleteProject}
+            />
           ))}
         </div>
       )}
@@ -102,12 +144,12 @@ export default function Home() {
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
-            <h2 className="text-xl font-bold mb-4">Create New Project</h2>
+            <h2 className="text-xl font-bold mb-4">新建项目</h2>
             <form onSubmit={handleCreateProject}>
               <div className="space-y-4">
                 {/* 项目名称输入 */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Project Name</label>
+                  <label className="block text-sm font-medium text-gray-700">项目名称</label>
                   <input
                     type="text"
                     required
@@ -118,7 +160,7 @@ export default function Home() {
                 </div>
                 {/* 项目描述输入 */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Description</label>
+                  <label className="block text-sm font-medium text-gray-700">项目描述</label>
                   <textarea
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border"
                     rows={3}
@@ -129,9 +171,9 @@ export default function Home() {
               </div>
               {/* 表单按钮 */}
               <div className="mt-6 flex justify-end space-x-3">
-                <Button variant="outline" type="button" onClick={() => setIsModalOpen(false)}>Cancel</Button>
+                <Button variant="outline" type="button" onClick={() => setIsModalOpen(false)}>取消</Button>
                 <Button type="submit">
-                  <Plus className="mr-2 h-4 w-4" /> Create Project
+                  <Plus className="mr-2 h-4 w-4" /> 创建项目
                 </Button>
               </div>
             </form>

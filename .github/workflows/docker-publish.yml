@@ -17,7 +17,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build app image
+        run: docker compose build app
+
+      - name: Start app
+        run: docker compose up -d app
+
+      - name: Run smoke test
+        run: python3 scripts/smoke-test.py
+
+      - name: Show app logs on failure
+        if: failure()
+        run: docker compose logs --tail=200 app
+
+      - name: Stop app
+        if: always()
+        run: docker compose down -v
+
   docker:
+    needs: smoke
     runs-on: ubuntu-latest
 
     steps:

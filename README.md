@@ -139,6 +139,12 @@ When code is pushed to `main`, GitHub Actions will build and publish the Docker 
 ghcr.io/verycafe/pdf-ocr
 ```
 
+Before the image is published, the workflow now:
+- builds the Dockerized app
+- starts the container locally in CI
+- runs `python3 scripts/smoke-test.py`
+- only publishes the GHCR image after the smoke test passes
+
 Common tags:
 ```bash
 ghcr.io/verycafe/pdf-ocr:latest
@@ -200,6 +206,11 @@ bash scripts/docker-status.sh
 Open a shell inside the app container:
 ```bash
 bash scripts/docker-shell.sh
+```
+
+Run the deployment smoke test locally:
+```bash
+python3 scripts/smoke-test.py
 ```
 
 ## First Run

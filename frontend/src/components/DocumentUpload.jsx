@@ -72,7 +72,7 @@ const PreviewModal = ({ doc, initialTab = 'pdf', onClose }) => {
                     }
                 }
             })
-            .catch(err => setContent("Failed to load content"))
+            .catch(err => setContent("内容加载失败"))
             .finally(() => setLoading(false));
         }
     }, [tab, doc.id]);
@@ -87,17 +87,17 @@ const PreviewModal = ({ doc, initialTab = 'pdf', onClose }) => {
                 <iframe
                     src={documentsApi.getFileUrl(doc.id)}
                     className="w-full h-full border rounded bg-white"
-                    title="PDF Preview"
+                    title="PDF 预览"
                 />
             );
         }
 
-        if (loading) return <div className="p-4">Loading...</div>;
+        if (loading) return <div className="p-4">加载中...</div>;
 
         // OCR 详情标签页（图片和识别文本对照）
         if (tab === 'ocr') {
             if (!ocrData || ocrData.length === 0) {
-                return <div className="p-4 text-gray-500">No OCR data available (maybe no images found).</div>;
+                return <div className="p-4 text-gray-500">暂无 OCR 数据（可能没有检测到图片）。</div>;
             }
             return (
                 <div className="w-full h-full overflow-auto bg-white border rounded">
@@ -345,7 +345,7 @@ const ProcessingSteps = ({ doc, onPreview }) => {
                   <button
                     onClick={(e) => { e.stopPropagation(); onPreview(step.tab); }}
                     className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-blue-600 transition-opacity ml-1 p-0.5 rounded hover:bg-gray-100"
-                    title={`View ${step.label} Result`}
+                    title={`查看${step.label}结果`}
                   >
                     <Eye className="w-3 h-3" />
                   </button>
@@ -534,7 +534,7 @@ export function DocumentUpload({ project, documents, onUpload, onDelete }) {
                                     ) : (
                                         <div className="flex items-center space-x-2 mt-1">
                                             <p className="text-xs text-gray-500">
-                                                Status: <span className="capitalize">{doc.status}</span>
+                                                状态：<span className="capitalize">{doc.status}</span>
                                             </p>
                                             {/* 错误信息 */}
                                             {doc.error_message && (
@@ -554,7 +554,7 @@ export function DocumentUpload({ project, documents, onUpload, onDelete }) {
                                     className="min-w-[104px]"
                                 >
                                     <Download className="mr-2 h-4 w-4" />
-                                    Download
+                                    下载
                                 </Button>
                                 {/* 预览按钮 */}
                                 <Button variant="ghost" size="icon" onClick={() => openPreview(doc)} className="text-gray-400 hover:text-blue-600">
@@ -590,9 +590,9 @@ export function DocumentUpload({ project, documents, onUpload, onDelete }) {
       <div className="bg-white shadow sm:rounded-lg">
         <div className="px-4 py-5 sm:p-6">
             <div>
-                <h3 className="text-lg leading-6 font-medium text-gray-900">Documents</h3>
+                <h3 className="text-lg leading-6 font-medium text-gray-900">文档</h3>
                 <div className="mt-2 max-w-xl text-sm text-gray-500">
-                    <p>Upload PDF, DOCX, or DOC documents for processing.</p>
+                    <p>上传 PDF、DOCX 或 DOC 文档进行处理。</p>
                 </div>
             </div>
             {renderDocList(documents)}

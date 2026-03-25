@@ -29,6 +29,10 @@ ocr_lock = threading.Lock()  # 线程锁，确保线程安全
 _ocr_engine = None
 _structure_engine = None  # 表格识别引擎
 
+def build_document_task_id(doc_id):
+    """为文档处理任务生成稳定的任务 ID，便于后续取消任务"""
+    return f"document_{doc_id}"
+
 def get_ocr_engine():
     """
     获取 OCR 引擎单例
@@ -679,7 +683,8 @@ def start_document_processing(doc_id):
 
         task_id = task_queue.add_ocr_task(
             DocumentProcessor.process_document,
-            args=(doc_id,)
+            args=(doc_id,),
+            task_id=build_document_task_id(doc_id)
         )
         return task_id
     except Exception as e:

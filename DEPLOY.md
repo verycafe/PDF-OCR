@@ -87,6 +87,10 @@
   ```bash
   bash scripts/docker-shell.sh
   ```
+- 运行部署冒烟测试可执行：
+  ```bash
+  python3 scripts/smoke-test.py
+  ```
 
 ### 注意事项
 - **PaddleOCR 内存占用**：OCR 模型加载需要一定内存，建议服务器内存至少 **2GB** (推荐 4GB)。
@@ -103,6 +107,11 @@
 - push 到 `main`
 - push `v*` 标签
 - 手动 `workflow_dispatch`
+
+发布前校验：
+- GitHub Actions 会先构建并启动 Docker 服务
+- 自动执行 `python3 scripts/smoke-test.py`
+- 只有冒烟测试通过后才会继续推送 GHCR 镜像
 
 发布目标：
 ```bash

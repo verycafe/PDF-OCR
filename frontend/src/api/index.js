@@ -27,7 +27,7 @@ export const projectsApi = {
   // 更新项目信息
   update: (id, data) => api.put(`/projects/${id}`, data),
   // 删除项目
-  delete: (id) => api.delete(`/projects/${id}`),
+  delete: (id, params = {}) => api.delete(`/projects/${id}`, { params }),
 };
 
 /**
