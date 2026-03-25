@@ -1,7 +1,8 @@
 """
 Flask 应用工厂 - 创建和配置 Flask 应用
 """
-from flask import Flask, request
+import os
+from flask import Flask, request, abort, send_from_directory
 from flask_cors import CORS
 from config import Config
 import datetime
@@ -18,6 +19,7 @@ def create_app(config_class=Config):
     """创建并配置 Flask 应用实例"""
     app = Flask(__name__)
     app.config.from_object(config_class)
+    frontend_dist_dir = os.path.abspath(os.path.join(app.root_path, '..', 'frontend', 'dist'))
 
     # 使用自定义 JSON 序列化器处理 datetime
     app.json = CustomJSONProvider(app)
@@ -65,5 +67,27 @@ def create_app(config_class=Config):
     app.register_blueprint(documents_bp, url_prefix='/api/documents')
     app.register_blueprint(status_bp, url_prefix='/api')
     app.register_blueprint(stream_bp, url_prefix='/api')
+
+    @app.route('/', defaults={'path': ''})
+    @app.route('/<path:path>')
+    def serve_frontend(path):
+        """生产环境下由 Flask 直接托管构建后的前端静态文件。"""
+        if path.startswith('api/'):
+            abort(404)
+
+        if path:
+            asset_path = os.path.join(frontend_dist_dir, path)
+            if os.path.isfile(asset_path):
+                return send_from_directory(frontend_dist_dir, path)
+
+        index_path = os.path.join(frontend_dist_dir, 'index.html')
+        if os.path.isfile(index_path):
+            return send_from_directory(frontend_dist_dir, 'index.html')
+
+        return (
+            'Frontend build artifacts not found. Run `npm run build` in `frontend/` '
+            'or build the Docker image which now compiles the frontend automatically.',
+            404,
+        )
 
     return app

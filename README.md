@@ -1,10 +1,11 @@
 # PDF-OCR
 
-A local web-based tool for PDF processing and OCR with intelligent table recognition.
+A local web-based tool for PDF processing and OCR with intelligent table recognition, with DOCX/DOC support via server-side PDF conversion.
 
 ## Features
 
 ### Core Capabilities
+- **DOCX/DOC Support**: Converts Word documents to PDF server-side, then reuses the existing PDF/OCR pipeline
 - **PDF Native Table Extraction**: Automatically detects and converts PDF native tables to Markdown format
 - **Image OCR**: Recognizes text in images using PaddleOCR 3.4.0
 - **Image Table Recognition**: Detects and extracts tables from images using PPStructureV3
@@ -120,6 +121,86 @@ Final Markdown Output
     ```
 
 5.  Open browser: http://localhost:5173
+
+## Docker Deployment
+
+Optional: create a `.env` file from the example before deployment:
+```bash
+cp .env.example .env
+```
+
+## GitHub Container Publishing
+
+The repository now includes a GitHub Actions workflow at
+[`/.github/workflows/docker-publish.yml`](/Users/tvwoo/Projects/PDF-OCR/.github/workflows/docker-publish.yml).
+
+When code is pushed to `main`, GitHub Actions will build and publish the Docker image to:
+```bash
+ghcr.io/verycafe/pdf-ocr
+```
+
+Common tags:
+```bash
+ghcr.io/verycafe/pdf-ocr:latest
+ghcr.io/verycafe/pdf-ocr:main
+ghcr.io/verycafe/pdf-ocr:sha-<commit>
+```
+
+If the first workflow run fails with a package permission error, check the GitHub repository setting:
+- `Settings -> Actions -> General -> Workflow permissions`
+- ensure it is allowed to write packages / use read and write permissions
+
+The repository can now be built from source into a single Docker image that:
+- builds the Vite frontend inside the image
+- serves the built frontend from Flask
+- runs the backend OCR service and DOCX/DOC conversion in the same container
+
+Build the image:
+```bash
+bash scripts/docker-build.sh
+```
+
+Build and start the service:
+```bash
+bash scripts/docker-up.sh
+```
+
+Then open: http://localhost:5001
+
+Start the existing image without rebuilding:
+```bash
+bash scripts/docker-start.sh
+```
+
+Stop the service:
+```bash
+bash scripts/docker-down.sh
+```
+
+View recent logs:
+```bash
+bash scripts/docker-logs.sh
+```
+
+Follow live logs:
+```bash
+bash scripts/docker-logs.sh -f app
+```
+
+Restart the running service without rebuilding:
+```bash
+bash scripts/docker-restart.sh
+```
+
+Show container status and HTTP health:
+```bash
+bash scripts/docker-status.sh
+```
+
+Open a shell inside the app container:
+```bash
+bash scripts/docker-shell.sh
+```
 
 ## First Run
 

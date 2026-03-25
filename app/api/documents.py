@@ -1,30 +1,52 @@
 """
-文档 API - 处理 PDF 文档的上传、删除、查询和内容获取
+文档 API - 处理文档上传、删除、查询和内容获取
 """
 import os
 import uuid
-from flask import Blueprint, request, jsonify, current_app, send_file
+from io import BytesIO
+from flask import Blueprint, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 from app.models.document import Document
 from app.models.project import Project
 from playhouse.shortcuts import model_to_dict
 from config import Config
+from app.services.document_conversion import (
+    SUPPORTED_DOCUMENT_EXTENSIONS,
+    OFFICE_DOCUMENT_EXTENSIONS,
+    DocumentConversionError,
+    convert_office_document_to_pdf,
+    get_file_extension,
+)
 
 documents_bp = Blueprint('documents', __name__)
 
 # 允许上传的文件扩展名
-ALLOWED_EXTENSIONS = {'pdf'}
+ALLOWED_EXTENSIONS = SUPPORTED_DOCUMENT_EXTENSIONS
 
 def allowed_file(filename):
     """检查文件扩展名是否允许"""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def build_storage_filename(filename, fallback='document'):
+    """生成安全的磁盘文件名，保留原始扩展名"""
+    base_name, ext = os.path.splitext(filename or '')
+    safe_base_name = secure_filename(base_name)
+    if not safe_base_name:
+        safe_base_name = fallback
+    return f"{safe_base_name}{ext.lower()}"
+
+def build_markdown_filename(filename, fallback='document'):
+    """根据原始文件名生成 Markdown 下载文件名"""
+    base_name, _ = os.path.splitext(filename or '')
+    safe_name = base_name.strip() or fallback
+    return f"{safe_name}.md"
 
 from app.services.document_processor import start_document_processing
 
 @documents_bp.route('/upload/<int:project_id>', methods=['POST'])
 def upload_file(project_id):
     """
-    上传 PDF 文件到指定项目
+    上传文档到指定项目
     支持单个或多个文件同时上传
     """
     if 'file' not in request.files:
@@ -40,42 +62,63 @@ def upload_file(project_id):
     except Project.DoesNotExist:
         return jsonify({'error': 'Project not found'}), 404
 
+    project_upload_dir = os.path.join(Config.UPLOAD_FOLDER, str(project_id))
+    os.makedirs(project_upload_dir, exist_ok=True)
+
+    def cleanup_paths(paths):
+        for path in paths:
+            if path and os.path.exists(path):
+                os.remove(path)
+
+    prepared_files = []
     uploaded_docs = []
 
     # 处理每个上传的文件
     for file in files:
         if file and allowed_file(file.filename):
             original_filename = file.filename
-            secure_name = secure_filename(original_filename)
-            # 如果 secure_filename 过滤掉了所有字符（例如全中文名），则使用原名，否则为了安全系统可能会报错
-            if not secure_name:
-                secure_name = "document.pdf"
-            
-            # 生成唯一文件名防止覆盖 (使用 secure_name 保存到磁盘以避免路径问题)
-            unique_filename = f"{uuid.uuid4().hex}_{secure_name}"
+            extension = get_file_extension(original_filename)
+            storage_name = build_storage_filename(original_filename)
+            unique_source_name = f"{uuid.uuid4().hex}_{storage_name}"
+            source_path = os.path.join(project_upload_dir, unique_source_name)
+            processing_path = source_path
 
-            # 创建项目专属上传目录
-            project_upload_dir = os.path.join(Config.UPLOAD_FOLDER, str(project_id))
-            os.makedirs(project_upload_dir, exist_ok=True)
+            try:
+                file.save(source_path)
 
-            # 保存文件到磁盘
-            file_path = os.path.join(project_upload_dir, unique_filename)
-            file.save(file_path)
+                if extension in OFFICE_DOCUMENT_EXTENSIONS:
+                    processing_path = os.path.join(
+                        project_upload_dir,
+                        f"{os.path.splitext(unique_source_name)[0]}.pdf"
+                    )
+                    convert_office_document_to_pdf(source_path, processing_path)
+                    os.remove(source_path)
 
-            # 保存到数据库 (使用原始文件名展示给用户)
-            doc = Document.create(
-                project=project,
-                filename=original_filename,
-                file_path=file_path,
-                status='queued'
-            )
+                prepared_files.append({
+                    'filename': original_filename,
+                    'file_path': processing_path,
+                })
+            except DocumentConversionError as exc:
+                cleanup_paths([source_path, processing_path, *[item['file_path'] for item in prepared_files]])
+                return jsonify({'error': f'Failed to convert {original_filename}: {exc}'}), 400
+            except Exception as exc:
+                cleanup_paths([source_path, processing_path, *[item['file_path'] for item in prepared_files]])
+                return jsonify({'error': f'Failed to prepare {original_filename}: {exc}'}), 400
 
-            # 启动文档处理任务
-            task_id = start_document_processing(doc.id)
+    for prepared_file in prepared_files:
+        doc = Document.create(
+            project=project,
+            filename=prepared_file['filename'],
+            file_path=prepared_file['file_path'],
+            status='queued'
+        )
 
-            doc_dict = model_to_dict(doc)
-            doc_dict['task_id'] = task_id
-            uploaded_docs.append(doc_dict)
+        # 启动文档处理任务
+        task_id = start_document_processing(doc.id)
+
+        doc_dict = model_to_dict(doc)
+        doc_dict['task_id'] = task_id
+        uploaded_docs.append(doc_dict)
 
     if not uploaded_docs:
         return jsonify({'error': 'No valid files uploaded'}), 400
@@ -110,14 +153,12 @@ def list_documents(project_id):
 
 @documents_bp.route('/<int:doc_id>/file', methods=['GET'])
 def get_document_file(doc_id):
-    """获取原始 PDF 文件（用于预览）"""
+    """获取用于预览的 PDF 文件"""
     try:
         doc = Document.get_by_id(doc_id)
         if not os.path.exists(doc.file_path):
             return jsonify({'error': 'File not found on disk'}), 404
-        response = send_file(doc.file_path, mimetype='application/pdf')
-        response.headers['Content-Disposition'] = f'inline; filename="{doc.filename}"'
-        return response
+        return send_file(doc.file_path, mimetype='application/pdf')
     except Document.DoesNotExist:
         return jsonify({'error': 'Document not found'}), 404
 
@@ -139,6 +180,27 @@ def get_document_content(doc_id):
             'processing_stage': doc.processing_stage,
             'ocr_data': doc.ocr_data  # OCR 识别详情（JSON）
         })
+    except Document.DoesNotExist:
+        return jsonify({'error': 'Document not found'}), 404
+
+@documents_bp.route('/<int:doc_id>/markdown', methods=['GET'])
+def download_document_markdown(doc_id):
+    """下载文档最终清理后的 Markdown 文件"""
+    try:
+        doc = Document.get_by_id(doc_id)
+
+        if doc.status != 'completed' or not doc.text_content:
+            return jsonify({'error': 'Markdown not ready'}), 409
+
+        markdown_buffer = BytesIO(doc.text_content.encode('utf-8'))
+        markdown_buffer.seek(0)
+
+        return send_file(
+            markdown_buffer,
+            mimetype='text/markdown; charset=utf-8',
+            as_attachment=True,
+            download_name=build_markdown_filename(doc.filename, f'document_{doc.id}')
+        )
     except Document.DoesNotExist:
         return jsonify({'error': 'Document not found'}), 404
 

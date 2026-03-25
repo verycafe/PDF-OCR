@@ -1,12 +1,37 @@
 """
 项目 API - 处理项目的增删改查操作
 """
-from flask import Blueprint, request, jsonify
+import os
+import zipfile
+from io import BytesIO
+from flask import Blueprint, request, jsonify, send_file
 from app.models.project import Project
 from app.models.document import Document
 from playhouse.shortcuts import model_to_dict
 
 projects_bp = Blueprint('projects', __name__)
+
+def build_markdown_filename(filename, fallback='document'):
+    """根据原始文件名生成 Markdown 文件名"""
+    base_name, _ = os.path.splitext(filename or '')
+    safe_name = base_name.strip() or fallback
+    return f"{safe_name}.md"
+
+def build_unique_archive_name(filename, used_names, fallback):
+    """避免 ZIP 包中的重名文件互相覆盖"""
+    candidate = build_markdown_filename(filename, fallback)
+    if candidate not in used_names:
+        used_names.add(candidate)
+        return candidate
+
+    base_name, ext = os.path.splitext(candidate)
+    suffix = 2
+    while True:
+        deduped_name = f"{base_name}_{suffix}{ext}"
+        if deduped_name not in used_names:
+            used_names.add(deduped_name)
+            return deduped_name
+        suffix += 1
 
 @projects_bp.route('/', methods=['GET'])
 def list_projects():
@@ -64,5 +89,45 @@ def update_project(project_id):
 
         project.save()
         return jsonify(model_to_dict(project))
+    except Project.DoesNotExist:
+        return jsonify({'error': 'Project not found'}), 404
+
+@projects_bp.route('/<int:project_id>/markdown-archive', methods=['GET'])
+def download_project_markdown_archive(project_id):
+    """下载项目下所有已完成文档的 Markdown ZIP 包"""
+    try:
+        project = Project.get_by_id(project_id)
+
+        ready_docs = list(
+            Document.select()
+            .where(
+                (Document.project == project) &
+                (Document.status == 'completed') &
+                Document.text_content.is_null(False) &
+                (Document.text_content != '')
+            )
+            .order_by(Document.created_at.asc())
+        )
+
+        if not ready_docs:
+            return jsonify({'error': 'No completed markdown files found'}), 404
+
+        zip_buffer = BytesIO()
+        used_names = set()
+
+        with zipfile.ZipFile(zip_buffer, 'w', compression=zipfile.ZIP_DEFLATED) as zip_file:
+            for doc in ready_docs:
+                archive_name = build_unique_archive_name(doc.filename, used_names, f'document_{doc.id}')
+                zip_file.writestr(archive_name, doc.text_content)
+
+        zip_buffer.seek(0)
+
+        project_name = project.name.strip() or f'project_{project.id}'
+        return send_file(
+            zip_buffer,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f'{project_name}_markdown.zip'
+        )
     except Project.DoesNotExist:
         return jsonify({'error': 'Project not found'}), 404

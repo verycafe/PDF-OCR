@@ -148,13 +148,27 @@ def analyze_page_layout(page):
     }
 
     try:
-        # 1. 提取图片
+        # 1. 提取真正绘制在当前页面上的图片
+        # `get_images(full=True)` 会返回页面资源里的所有图片对象，
+        # Office 转出的 PDF 经常包含大量未实际绘制的共享资源。
+        # 这里只保留在当前页上有实际显示区域的图片，避免把资源误算成 OCR 图片。
         image_list = page.get_images(full=True)
-        for img_index, img in enumerate(image_list):
+        seen_xrefs = set()
+        for img in image_list:
             xref = img[0]
-            bbox = page.get_image_bbox(img)
+            if xref in seen_xrefs:
+                continue
+
+            rects = [rect for rect in page.get_image_rects(img) if rect.width > 0 and rect.height > 0]
+            if not rects:
+                continue
+
             base_image = page.parent.extract_image(xref)
-            layout['images'].append((bbox, base_image))
+            if not base_image or "image" not in base_image:
+                continue
+
+            seen_xrefs.add(xref)
+            layout['images'].append((rects[0], base_image))
 
         # 2. 检测表格（使用 PyMuPDF 的表格检测）
         tables = page.find_tables()

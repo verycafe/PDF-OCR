@@ -4,9 +4,26 @@
 from flask import Blueprint, jsonify
 from app.models.document import Document
 from app.models.project import Project
+from app.models.base import db
 from playhouse.shortcuts import model_to_dict
 
 status_bp = Blueprint('status', __name__)
+
+@status_bp.route('/health', methods=['GET'])
+def health_check():
+    """健康检查接口，供 Docker healthcheck 和运维脚本调用"""
+    try:
+        db.execute_sql('SELECT 1')
+        return jsonify({
+            'status': 'ok',
+            'database': 'ok'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'database': 'error',
+            'error': str(e)
+        }), 503
 
 @status_bp.route('/project/<int:project_id>/doc_status', methods=['GET'])
 def get_project_status(project_id):

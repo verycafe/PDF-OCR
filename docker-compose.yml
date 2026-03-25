@@ -1,18 +1,28 @@
-version: '3.8'
-
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "5001:5001"
+      - "${PORT:-5001}:${PORT:-5001}"
     volumes:
       - ./data:/app/data
     environment:
-      - FLASK_ENV=production
-      - PORT=5001
-      - SECRET_KEY=your-secret-key-change-in-production
+      FLASK_ENV: ${FLASK_ENV:-production}
+      PORT: ${PORT:-5001}
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
+      OCR_MAX_WORKERS: ${OCR_MAX_WORKERS:-2}
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: ${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK:-True}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          python -c "import os, urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT', '5001') + '/api/health').read()"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
     networks:
       - app-network

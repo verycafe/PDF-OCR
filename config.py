@@ -12,7 +12,7 @@ class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev_key')  # Flask 密钥
 
     # 任务队列配置
-    OCR_MAX_WORKERS = 2  # OCR 处理的最大并发工作线程数
+    OCR_MAX_WORKERS = int(os.environ.get('OCR_MAX_WORKERS', 2))  # OCR 处理的最大并发工作线程数
 
     @staticmethod
     def init_app(app):

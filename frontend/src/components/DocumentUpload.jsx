@@ -1,15 +1,15 @@
 /**
  * 文档上传和管理组件
  * 功能：
- * 1. 支持拖拽和点击上传 PDF 文件
+ * 1. 支持拖拽和点击上传 PDF / DOCX / DOC 文件
  * 2. 显示文档处理进度（解析 → OCR → 合并 → 清理）
  * 3. 预览文档内容（原始 PDF、解析结果、OCR 详情、合并内容、清理结果）
- * 4. 下载各阶段处理结果
+ * 4. 下载最终 Markdown 文件（单个/批量）
  */
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { Upload, FileText, CheckCircle, XCircle, Loader2, Trash2, Eye, Download } from 'lucide-react';
 import { Button } from './ui/button';
-import { documentsApi } from '../api';
+import { documentsApi, projectsApi } from '../api';
 
 /**
  * 预览模态框组件
@@ -240,7 +240,7 @@ const PreviewModal = ({ doc, initialTab = 'pdf', onClose }) => {
                         className={`px-3 py-1 text-sm rounded-md transition-colors ${tab === 'pdf' ? 'bg-white shadow text-blue-600 font-medium' : 'text-gray-500 hover:text-gray-900'}`}
                         onClick={() => setTab('pdf')}
                     >
-                        Original PDF
+                        PDF Preview
                     </button>
                     <button
                         className={`px-3 py-1 text-sm rounded-md transition-colors ${tab === 'parsing' ? 'bg-white shadow text-blue-600 font-medium' : 'text-gray-500 hover:text-gray-900'}`}
@@ -393,6 +393,28 @@ export function DocumentUpload({ project, documents, onUpload, onDelete }) {
   // 拖拽激活状态
   const [dragActive, setDragActive] = useState(false);
 
+  const isMarkdownReady = (doc) => doc.status === 'completed' && doc.processing_stage === 'done';
+
+  const readyDocuments = documents.filter(isMarkdownReady);
+
+  const triggerBrowserDownload = (url) => {
+    const link = document.createElement('a');
+    link.href = url;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleDownloadDocument = (doc) => {
+    if (!isMarkdownReady(doc)) return;
+    triggerBrowserDownload(documentsApi.getMarkdownDownloadUrl(doc.id));
+  };
+
+  const handleDownloadAllMarkdown = () => {
+    if (readyDocuments.length === 0) return;
+    triggerBrowserDownload(projectsApi.getMarkdownArchiveUrl(project.id));
+  };
+
   /**
    * 打开预览模态框
    * @param {Object} doc - 文档对象
@@ -467,22 +489,31 @@ export function DocumentUpload({ project, documents, onUpload, onDelete }) {
             onDrop={handleDrop}
         >
             {/* 上传区域标题 */}
-            <div className="flex justify-between items-center mb-4">
+            <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
                 <div className="text-sm text-gray-500">
-                    {docs.length === 0 ? "Drag & drop PDF here, or click upload" : `${docs.length} document(s) uploaded`}
+                    {docs.length === 0 ? "Drag & drop PDF, DOCX, or DOC here, or click upload" : `${docs.length} document(s) uploaded`}
                 </div>
-                <div>
+                <div className="flex items-center gap-2">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleDownloadAllMarkdown}
+                        disabled={readyDocuments.length === 0}
+                    >
+                        <Download className="mr-2 h-4 w-4" />
+                        Download All MD
+                    </Button>
                     {/* 隐藏的文件输入框 */}
                     <input
                         type="file"
-                        accept=".pdf"
+                        accept=".pdf,.doc,.docx"
                         multiple
                         className="hidden"
                         ref={fileInputRef}
                         onChange={handleFileChange}
                     />
                     <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
-                        <Upload className="mr-2 h-4 w-4" /> Upload PDF
+                        <Upload className="mr-2 h-4 w-4" /> Upload Document
                     </Button>
                 </div>
             </div>
@@ -515,6 +546,16 @@ export function DocumentUpload({ project, documents, onUpload, onDelete }) {
                             </div>
                             {/* 操作按钮 */}
                             <div className="flex items-center space-x-2 flex-shrink-0">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleDownloadDocument(doc)}
+                                    disabled={!isMarkdownReady(doc)}
+                                    className="min-w-[104px]"
+                                >
+                                    <Download className="mr-2 h-4 w-4" />
+                                    Download
+                                </Button>
                                 {/* 预览按钮 */}
                                 <Button variant="ghost" size="icon" onClick={() => openPreview(doc)} className="text-gray-400 hover:text-blue-600">
                                     <Eye className="h-4 w-4" />
@@ -548,9 +589,11 @@ export function DocumentUpload({ project, documents, onUpload, onDelete }) {
       {/* 文档上传区域 */}
       <div className="bg-white shadow sm:rounded-lg">
         <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">Documents</h3>
-            <div className="mt-2 max-w-xl text-sm text-gray-500">
-                <p>Upload PDF documents for processing.</p>
+            <div>
+                <h3 className="text-lg leading-6 font-medium text-gray-900">Documents</h3>
+                <div className="mt-2 max-w-xl text-sm text-gray-500">
+                    <p>Upload PDF, DOCX, or DOC documents for processing.</p>
+                </div>
             </div>
             {renderDocList(documents)}
         </div>

@@ -1,5 +1,5 @@
 """
-文档模型 - 定义 PDF 文档及其处理状态的数据结构
+文档模型 - 定义上传文档及其处理状态的数据结构
 """
 from peewee import *
 from app.models.base import BaseModel
@@ -7,11 +7,11 @@ from app.models.project import Project
 import datetime
 
 class Document(BaseModel):
-    """文档表 - 存储 PDF 文档及其处理结果"""
+    """文档表 - 存储上传文档及其处理结果"""
     # 基础信息
     project = ForeignKeyField(Project, backref='documents', on_delete='CASCADE')  # 所属项目
     filename = CharField()  # 原始文件名
-    file_path = CharField()  # 文件在服务器上的绝对路径
+    file_path = CharField()  # 用于处理和预览的 PDF 文件绝对路径
 
     # 处理状态
     status = CharField(default='pending')  # 处理状态: pending(待处理), queued(队列中), processing(处理中), completed(完成), failed(失败)
