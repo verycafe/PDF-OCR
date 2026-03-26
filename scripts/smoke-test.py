@@ -112,12 +112,18 @@ def ensure_status(actual: int, expected: int, message: str) -> None:
 
 def wait_for_service(base_url: str, timeout_seconds: int) -> None:
     deadline = time.time() + timeout_seconds
+    last_error: Exception | None = None
     while time.time() < deadline:
-        status, payload, _ = request_json(base_url, "GET", "/api/health", timeout=10)
-        if status == 200 and isinstance(payload, dict) and payload.get("status") == "ok":
-            log("Service health check passed.")
-            return
+        try:
+            status, payload, _ = request_json(base_url, "GET", "/api/health", timeout=10)
+            if status == 200 and isinstance(payload, dict) and payload.get("status") == "ok":
+                log("Service health check passed.")
+                return
+        except (urllib.error.URLError, ConnectionResetError, TimeoutError, OSError) as exc:
+            last_error = exc
         time.sleep(2)
+    if last_error is not None:
+        raise RuntimeError(f"Timed out waiting for /api/health to become ready: {last_error}")
     raise RuntimeError("Timed out waiting for /api/health to become ready")
 
 
