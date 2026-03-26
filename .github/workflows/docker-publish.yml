@@ -31,8 +31,27 @@ jobs:
       - name: Start app
         run: docker compose up -d app
 
+      - name: Run health check
+        run: python3 scripts/smoke-test.py --only-health-check
+
+      - name: Verify runtime OCR init
+        run: >
+          docker compose exec -T app python -u -c
+          "from paddleocr import PaddleOCR;
+          print('start ocr', flush=True);
+          PaddleOCR(lang='ch', use_textline_orientation=False);
+          print('done ocr', flush=True)"
+
+      - name: Verify runtime PPStructure init
+        run: >
+          docker compose exec -T app python -u -c
+          "from paddleocr import PPStructureV3;
+          print('start structure', flush=True);
+          PPStructureV3(use_table_recognition=True, use_formula_recognition=False, use_chart_recognition=False, lang='ch');
+          print('done structure', flush=True)"
+
       - name: Run smoke test
-        run: python3 scripts/smoke-test.py
+        run: python3 scripts/smoke-test.py --skip-health-check --skip-runtime-deps
 
       - name: Show app logs on failure
         if: failure()

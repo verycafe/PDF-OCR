@@ -36,8 +36,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def log(message: str) -> None:
+    print(message, flush=True)
+
+
 def run(cmd: list[str], *, cwd: Path = REPO_ROOT, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    print(f"+ {' '.join(cmd)}")
+    log(f"+ {' '.join(cmd)}")
     result = subprocess.run(
         cmd,
         cwd=str(cwd),
@@ -47,9 +51,9 @@ def run(cmd: list[str], *, cwd: Path = REPO_ROOT, env: dict[str, str] | None = N
     )
     if result.returncode != 0:
         if result.stdout:
-            print(result.stdout)
+            print(result.stdout, end="", flush=True)
         if result.stderr:
-            print(result.stderr, file=sys.stderr)
+            print(result.stderr, file=sys.stderr, end="", flush=True)
         raise RuntimeError(f"Command failed with exit code {result.returncode}: {' '.join(cmd)}")
     return result
 
@@ -111,7 +115,7 @@ def wait_for_service(base_url: str, timeout_seconds: int) -> None:
     while time.time() < deadline:
         status, payload, _ = request_json(base_url, "GET", "/api/health", timeout=10)
         if status == 200 and isinstance(payload, dict) and payload.get("status") == "ok":
-            print("Service health check passed.")
+            log("Service health check passed.")
             return
         time.sleep(2)
     raise RuntimeError("Timed out waiting for /api/health to become ready")
@@ -145,7 +149,7 @@ def upload_document(base_url: str, project_id: int, file_path: Path) -> dict:
     ensure_status(status, 201, f"Upload failed for {file_path.name}")
     if not isinstance(response_json, list) or not response_json:
         raise RuntimeError(f"Unexpected upload response for {file_path.name}: {response_json}")
-    print(f"Uploaded {file_path.name} as document {response_json[0]['id']}")
+    log(f"Uploaded {file_path.name} as document {response_json[0]['id']}")
     return response_json[0]
 
 
@@ -164,7 +168,7 @@ def wait_for_documents(base_url: str, project_id: int, doc_ids: set[int], timeou
                 raise RuntimeError(f"Document processing failed: {failed}")
 
             if all(doc.get("status") == "completed" for doc in docs.values()):
-                print("All uploaded documents completed processing.")
+                log("All uploaded documents completed processing.")
                 return docs
 
         time.sleep(2)
@@ -221,7 +225,7 @@ def create_project(base_url: str, name: str, description: str) -> dict:
     ensure_status(status, 201, "Project creation failed")
     if not isinstance(response_json, dict):
         raise RuntimeError(f"Unexpected project creation response: {response_json}")
-    print(f"Created project {response_json['id']} ({name})")
+    log(f"Created project {response_json['id']} ({name})")
     return response_json
 
 
@@ -304,7 +308,7 @@ subprocess.run(
     for label, path in fixtures.items():
         if not path.exists():
             raise RuntimeError(f"Fixture generation failed: missing {label} file at {path}")
-    print(f"Generated fixtures in {temp_dir}")
+    log(f"Generated fixtures in {temp_dir}")
     return fixtures
 
 
@@ -362,6 +366,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--app-service", default=os.environ.get("APP_SERVICE", "app"))
     parser.add_argument("--service-timeout", type=int, default=int(os.environ.get("SMOKE_SERVICE_TIMEOUT_SEC", "120")))
     parser.add_argument("--processing-timeout", type=int, default=int(os.environ.get("SMOKE_PROCESSING_TIMEOUT_SEC", "1200")))
+    parser.add_argument("--skip-health-check", action="store_true")
+    parser.add_argument("--skip-runtime-deps", action="store_true")
+    parser.add_argument("--only-health-check", action="store_true")
     return parser.parse_args()
 
 
@@ -369,11 +376,20 @@ def main() -> int:
     args = parse_args()
     created_projects: list[int] = []
 
-    wait_for_service(args.base_url, args.service_timeout)
+    if args.only_health_check and args.skip_health_check:
+        raise RuntimeError("Cannot combine --only-health-check with --skip-health-check")
 
-    root_status, _, _ = http_request(args.base_url, "GET", "/", timeout=30)
-    ensure_status(root_status, 200, "Frontend index request failed")
-    verify_runtime_dependencies(args.app_service)
+    if not args.skip_health_check:
+        wait_for_service(args.base_url, args.service_timeout)
+        root_status, _, _ = http_request(args.base_url, "GET", "/", timeout=30)
+        ensure_status(root_status, 200, "Frontend index request failed")
+        log("Frontend index check passed.")
+    if args.only_health_check:
+        log("Health-only smoke check passed.")
+        return 0
+
+    if not args.skip_runtime_deps:
+        verify_runtime_dependencies(args.app_service)
 
     with tempfile.TemporaryDirectory(prefix="pdf-ocr-smoke-") as temp_dir_str:
         temp_dir = Path(temp_dir_str)
@@ -410,14 +426,18 @@ def main() -> int:
             verify_project_deleted(args.base_url, busy_project["id"])
             created_projects.remove(busy_project["id"])
 
-            print("Smoke test passed.")
+            log("Smoke test passed.")
             return 0
         finally:
             for project_id in list(created_projects):
                 try:
                     delete_project(args.base_url, project_id, force=True, expected_status=200)
                 except Exception as cleanup_error:
-                    print(f"Cleanup failed for project {project_id}: {cleanup_error}", file=sys.stderr)
+                    print(
+                        f"Cleanup failed for project {project_id}: {cleanup_error}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
 
 
 if __name__ == "__main__":
