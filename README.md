@@ -68,7 +68,9 @@ Final Markdown Output
 
 **Size**: ~200MB
 
-**Download**: Automatic on first use
+**Download**:
+- Docker image: preloaded during `docker build`
+- Local source run: automatic on first use
 
 ### PPStructureV3
 **Purpose**: Document structure analysis and table recognition
@@ -82,11 +84,14 @@ Final Markdown Output
 
 **Total Size**: ~1GB
 
-**Download**: Automatic on first use (may take several minutes)
+**Download**:
+- Docker image: preloaded during `docker build`
+- Local source run: automatic on first use (may take several minutes)
 
 **Cache Location**:
 - `~/.cache/huggingface/hub/models--PaddlePaddle--*`
 - `~/.paddlex/official_models/`
+- Docker image cache path: `/app/.paddlex/official_models/`
 
 ### PyMuPDF (fitz)
 **Purpose**: PDF parsing and native table extraction
@@ -160,6 +165,7 @@ The repository can now be built from source into a single Docker image that:
 - builds the Vite frontend inside the image
 - serves the built frontend from Flask
 - runs the backend OCR service and DOCX/DOC conversion in the same container
+- preloads OCR / PPStructure models during image build so runtime startup does not need a first-use model download
 
 Build the image:
 ```bash
@@ -215,9 +221,11 @@ python3 scripts/smoke-test.py
 
 ## First Run
 
-On first run, the system will download required models (~1.2GB total):
+When running from source outside Docker, the system will still download required models on first OCR use (~1.2GB total):
 - PaddleOCR models: ~200MB
 - PPStructureV3 models: ~1GB
+
+For Docker deployments, those models are now downloaded during image build and baked into the image.
 
 This is a one-time download. Subsequent runs will use cached models.
 

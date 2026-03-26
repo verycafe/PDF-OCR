@@ -5,6 +5,7 @@
 
 由于本项目已经包含 `Dockerfile` 且依赖 Python/Node 环境，**Railway** 是最快部署的选择，因为它能自动识别 Dockerfile 并构建。
 当前镜像还会安装 LibreOffice Writer，用于将 `DOCX/DOC` 保真转换为 PDF 后再进入现有 OCR 流水线。
+当前镜像也会在构建阶段预下载 OCR / PPStructure 模型，因此容器首次启动时不会再临时下载模型。
 
 **优势**：
 - **零配置**：自动检测 Dockerfile。
@@ -58,6 +59,7 @@
 
 补充说明：
 - 当前 Dockerfile 会在镜像构建阶段自动执行前端 `npm ci` 和 `npm run build`
+- 当前 Dockerfile 会在镜像构建阶段预下载 PaddleOCR / PPStructure 所需模型
 - Flask 会直接托管构建后的前端静态文件，所以服务器不需要额外安装 Node.js 或单独运行 Vite
 - 镜像已经构建过时，可直接启动：
   ```bash
@@ -94,7 +96,7 @@
 
 ### 注意事项
 - **PaddleOCR 内存占用**：OCR 模型加载需要一定内存，建议服务器内存至少 **2GB** (推荐 4GB)。
-- **构建时间**：由于需要安装 PyTorch、PaddlePaddle 和 LibreOffice，首次构建可能需要更久。
+- **构建时间**：由于需要安装 PyTorch、PaddlePaddle、LibreOffice，并预下载 OCR/结构化模型，首次构建可能需要更久。
 
 ---
 

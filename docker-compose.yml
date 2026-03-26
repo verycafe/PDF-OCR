@@ -13,6 +13,7 @@ services:
       SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
       OCR_MAX_WORKERS: ${OCR_MAX_WORKERS:-2}
       PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: ${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK:-True}
+      PADDLE_PDX_CACHE_HOME: ${PADDLE_PDX_CACHE_HOME:-/app/.paddlex}
     healthcheck:
       test:
         - CMD-SHELL
