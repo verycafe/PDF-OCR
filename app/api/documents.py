@@ -2,6 +2,7 @@
 文档 API - 处理文档上传、删除、查询和内容获取
 """
 import os
+import shutil
 import uuid
 from io import BytesIO
 from flask import Blueprint, request, jsonify, send_file
@@ -17,6 +18,8 @@ from app.services.document_conversion import (
     convert_office_document_to_pdf,
     get_file_extension,
 )
+from app.services.document_processor import build_document_task_id, start_document_processing
+from app.services.task_queue import task_queue
 
 documents_bp = Blueprint('documents', __name__)
 
@@ -41,7 +44,51 @@ def build_markdown_filename(filename, fallback='document'):
     safe_name = base_name.strip() or fallback
     return f"{safe_name}.md"
 
-from app.services.document_processor import start_document_processing
+
+def _resolve_data_path(file_path):
+    """Best-effort path resolution for host/container absolute paths inside ./data."""
+    candidates = []
+    raw_path = (file_path or '').strip()
+    if not raw_path:
+        return None
+
+    candidates.append(raw_path)
+
+    for marker in (f'{os.sep}data{os.sep}', f'{os.sep}app{os.sep}data{os.sep}'):
+        marker_index = raw_path.rfind(marker)
+        if marker_index != -1:
+            relative_path = raw_path[marker_index + len(marker):]
+            candidates.append(os.path.join(Config.DATA_DIR, relative_path))
+
+    seen = set()
+    for candidate in candidates:
+        normalized = os.path.abspath(candidate)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if os.path.exists(normalized):
+            return normalized
+
+    return os.path.abspath(candidates[-1])
+
+
+def _cleanup_document_artifacts(doc):
+    """Remove file-system artifacts tied to a document."""
+    resolved_file_path = _resolve_data_path(doc.file_path)
+    project_upload_dir = os.path.join(Config.UPLOAD_FOLDER, str(doc.project_id))
+
+    paths_to_remove = [
+        resolved_file_path,
+        os.path.join(project_upload_dir, f'images_{doc.id}'),
+    ]
+
+    for target_path in paths_to_remove:
+        if not target_path or not os.path.exists(target_path):
+            continue
+        if os.path.isdir(target_path):
+            shutil.rmtree(target_path, ignore_errors=True)
+        else:
+            os.remove(target_path)
 
 @documents_bp.route('/upload/<int:project_id>', methods=['POST'])
 def upload_file(project_id):
@@ -130,9 +177,9 @@ def delete_document(doc_id):
     """删除文档（同时删除数据库记录和磁盘文件）"""
     try:
         doc = Document.get_by_id(doc_id)
-        # 从磁盘删除文件
-        if os.path.exists(doc.file_path):
-            os.remove(doc.file_path)
+
+        task_queue.cancel_task(build_document_task_id(doc.id))
+        _cleanup_document_artifacts(doc)
 
         # 从数据库删除记录
         doc.delete_instance()
@@ -156,9 +203,10 @@ def get_document_file(doc_id):
     """获取用于预览的 PDF 文件"""
     try:
         doc = Document.get_by_id(doc_id)
-        if not os.path.exists(doc.file_path):
+        resolved_file_path = _resolve_data_path(doc.file_path)
+        if not resolved_file_path or not os.path.exists(resolved_file_path):
             return jsonify({'error': 'File not found on disk'}), 404
-        return send_file(doc.file_path, mimetype='application/pdf')
+        return send_file(resolved_file_path, mimetype='application/pdf')
     except Document.DoesNotExist:
         return jsonify({'error': 'Document not found'}), 404
 
@@ -210,7 +258,11 @@ def get_document_image(doc_id, image_name):
     try:
         doc = Document.get_by_id(doc_id)
         # 图片存储在 images_<doc_id> 目录下
-        doc_dir = os.path.dirname(doc.file_path)
+        resolved_file_path = _resolve_data_path(doc.file_path)
+        if not resolved_file_path:
+            return jsonify({'error': 'Image not found'}), 404
+
+        doc_dir = os.path.dirname(resolved_file_path)
         image_dir = os.path.join(doc_dir, f"images_{doc_id}")
         image_path = os.path.join(image_dir, image_name)
 
